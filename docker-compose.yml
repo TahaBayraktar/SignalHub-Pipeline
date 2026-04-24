@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: predwise
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: predwise_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./SQL/predwise.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./SQL/predwiseIndex.sql:/docker-entrypoint-initdb.d/02_index.sql
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d predwise"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  hub:
+    build: ./Hub
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: predwise
+      DB_USER: postgres
+      DB_PASSWORD: predwise_pass
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - hub_storage:/app/storage
+      - hub_logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  collector:
+    build: ./Collector
+    environment:
+      HUB_INGEST_URL: http://hub:8000/ingest
+    depends_on:
+      hub:
+        condition: service_healthy
+    volumes:
+      - collector_data:/app/data
+      - collector_logs:/app/logs
+    # 12 saatlik simülasyon — acceleration=100 ile ~7 dakikada tamamlanır
+    # Kısa test için: --hours 0.1 --acceleration 100 (~1-2 dakika, 36 paket)
+    command: [
+      "python", "-m", "app.collector",
+      "--mode", "accelerated",
+      "--hours", "12",
+      "--acceleration", "100"
+    ]
+
+volumes:
+  postgres_data:
+  hub_storage:
+  hub_logs:
+  collector_data:
+  collector_logs:
